@@ -24,9 +24,12 @@ import org.slf4j.*;
 import javax.annotation.*;
 import java.io.*;
 import java.util.*;
+import java.math.BigInteger;
 
 import static com.google.common.base.Preconditions.*;
 import static com.google.common.base.Preconditions.checkState;
+import static java.lang.Math.min;
+import static java.lang.StrictMath.max;
 
 /**
  * A TransactionOutput message contains a scriptPubKey that controls who is able to spend its value. It is a sub-part
@@ -185,13 +188,151 @@ public class TransactionOutput extends ChildMessage implements Serializable {
      * Returns the value of this output. This is the amount of currency that the destination address
      * receives.
      */
-    public Coin getValue() {
+    public Coin getValueNoInterest() {
         maybeParse();
         try {
             return Coin.valueOf(value);
         } catch (IllegalArgumentException e) {
             throw new IllegalStateException(e.getMessage(), e);
         }
+    }
+
+
+    public Coin getValue(){
+
+        int outputBlockHeight=0;
+        int valuationHeight=0;
+
+        try {
+            outputBlockHeight = this.getParentTransaction().getConfidence().getAppearedAtChainHeight();
+            valuationHeight = outputBlockHeight + this.getParentTransaction().getConfidence().getDepthInBlocks();
+        }catch(Exception e){
+            outputBlockHeight=0;
+            valuationHeight=0;
+        }
+
+        maybeParse();
+        try {
+            if(!rateTableInit) {
+                initRateTable();
+            }
+            //return Coin.valueOf(GetInterest(value, outputBlockHeight, valuationHeight, scriptPubKey.GetTermDepositReleaseBlock()));
+            return Coin.valueOf(GetInterest(value, outputBlockHeight, valuationHeight, -1));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException(e.getMessage(), e);
+        }
+
+    }
+
+    static int THIRTYDAYS=561*30;
+    static int ONEYEAR=561*365;
+    static int ONEYEARPLUS1=ONEYEAR+1;
+    static int TWOYEARS=ONEYEAR*2;
+
+    static long[] rateTable=new long[561*365+1];
+    static long[] bonusTable=new long[561*365+1];
+    static boolean rateTableInit=false;
+
+    long getBonusForAmount(int periods, long theAmount){
+
+        BigInteger amount256=BigInteger.valueOf(theAmount);
+        BigInteger rate256=BigInteger.valueOf(bonusTable[periods]);
+        BigInteger rate0256=BigInteger.valueOf(bonusTable[0]);
+        BigInteger result=(amount256.multiply(rate256)).divide(rate0256);
+        return result.longValue()-theAmount;
+    }
+
+    long getRateForAmount(int periods, long theAmount){
+
+        BigInteger amount256=BigInteger.valueOf(theAmount);
+        BigInteger rate256=BigInteger.valueOf(rateTable[periods]);
+        BigInteger rate0256=BigInteger.valueOf(rateTable[0]);
+        BigInteger result=(amount256.multiply(rate256)).divide(rate0256);
+        return  result.longValue()-theAmount;
+    }
+
+    void initRateTable(){
+        //String str;
+
+        rateTable[0]=1;
+        rateTable[0]=rateTable[0]<<62;
+        bonusTable[0]=1;
+        bonusTable[0]=bonusTable[0]<<54;
+
+        //Interest rate on each block 1+(1/2^22)
+        for(int i=1;i<ONEYEARPLUS1;i++){
+            rateTable[i]=rateTable[i-1]+(rateTable[i-1]>>22);
+            bonusTable[i]=bonusTable[i-1]+(bonusTable[i-1]>>16);
+            //    str += strprintf("%d %x %x\n",i,rateTable[i], bonusTable[i]);
+        }
+
+        for(int i=0;i<ONEYEAR;i++){
+            //    str += strprintf("rate: %d %d %d\n",i,getRateForAmount(i,COIN*100),getBonusForAmount(i,COIN*100));
+        }
+        rateTableInit=true;
+        //return str;
+    }
+
+
+
+    static int THEUNFORKENING = 257000;
+    long GetInterest(long nValue, int outputBlockHeight, int valuationHeight, int maturationBlock){
+
+        //These conditions generally should not occur
+        if(maturationBlock >= 500000000 || outputBlockHeight<0 || valuationHeight<0 || valuationHeight<outputBlockHeight){
+            return nValue;
+        }
+
+        //Regular deposits can have a maximum of 30 days interest
+        int blocks=min(THIRTYDAYS,valuationHeight-outputBlockHeight);
+
+        //Term deposits may have up to 1 year of interest
+        if(maturationBlock>0){
+            blocks=min(ONEYEAR,valuationHeight-outputBlockHeight);
+
+            //Bug fix here - if the valuation height is greater than the maturation height, the deposit continues to earn interest after maturation
+            //Need the minimum of three figures - one year, valuation height, or maturation period
+            if(valuationHeight>=THEUNFORKENING){
+                blocks=min(blocks,maturationBlock-outputBlockHeight);
+                //If a user hodls before is up to date with chain, the maturation date can appear in the past, causing a crash trying to calculate negative interest
+                blocks=max(blocks,0);
+            }
+        }
+
+        long standardInterest=getRateForAmount(blocks, nValue);
+
+        long bonusAmount=0;
+        //Reward balances more in early stages
+        if(outputBlockHeight<TWOYEARS){
+            //Calculate bonus rate based on outputBlockHeight
+            bonusAmount=getBonusForAmount(blocks, nValue);
+            BigInteger am=BigInteger.valueOf(bonusAmount);
+            BigInteger fac=BigInteger.valueOf(TWOYEARS-outputBlockHeight);
+            BigInteger div=BigInteger.valueOf(TWOYEARS);
+            BigInteger result=((am.multiply(fac.pow(4))).divide((div.pow(4))));
+            bonusAmount=result.longValue();
+        }
+
+
+        long interestAmount=standardInterest+bonusAmount;
+
+        long termDepositAmount=0;
+
+        //Reward term deposits more
+        if(maturationBlock>0){
+            int term=min(ONEYEAR,maturationBlock-outputBlockHeight);
+
+            //No advantage to term deposits of less than 2 days
+            if(term>561*2){
+                BigInteger am=BigInteger.valueOf(interestAmount);
+                BigInteger fac=BigInteger.valueOf(TWOYEARS-term);
+                BigInteger div=BigInteger.valueOf(TWOYEARS);
+                BigInteger result=am.subtract((am.multiply(fac.pow(6))).divide((div.pow(6))));
+                termDepositAmount=result.longValue();
+            }
+        }
+
+        return nValue+interestAmount+termDepositAmount;
     }
 
     /**
@@ -201,6 +342,10 @@ public class TransactionOutput extends ChildMessage implements Serializable {
         checkNotNull(value);
         unCache();
         this.value = value.value;
+    }
+
+    public void subtract(Coin subvalue){
+        this.value=this.value-subvalue.getValue();
     }
 
     /**
@@ -405,9 +550,9 @@ public class TransactionOutput extends ChildMessage implements Serializable {
     }
 
     /** Returns a copy of the output detached from its containing transaction, if need be. */
-    public TransactionOutput duplicateDetached() {
+    /*public TransactionOutput duplicateDetached() {
         return new TransactionOutput(params, null, Coin.valueOf(value), org.spongycastle.util.Arrays.clone(scriptBytes));
-    }
+    }*/
 
     @Override
     public boolean equals(Object o) {
