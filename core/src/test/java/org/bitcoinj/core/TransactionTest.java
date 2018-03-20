@@ -59,14 +59,14 @@ public class TransactionTest {
 
     @Test(expected = VerificationException.NegativeValueOutput.class)
     public void negativeOutput() throws Exception {
-        tx.getOutput(0).setValue(Coin.NEGATIVE_SATOSHI);
+        tx.getOutput(0).setValueBeforeInterest(Coin.NEGATIVE_SATOSHI);
         tx.verify();
     }
 
     @Test(expected = VerificationException.ExcessiveValue.class)
     public void exceedsMaxMoney2() throws Exception {
         Coin half = NetworkParameters.MAX_MONEY.divide(2).add(Coin.SATOSHI);
-        tx.getOutput(0).setValue(half);
+        tx.getOutput(0).setValueBeforeInterest(half);
         tx.addOutput(half, ADDRESS);
         tx.verify();
     }
