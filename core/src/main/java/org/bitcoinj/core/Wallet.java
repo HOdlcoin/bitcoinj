@@ -3493,7 +3493,7 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
                 CoinSelector selector = req.coinSelector == null ? coinSelector : req.coinSelector;
                 bestCoinSelection = selector.select(NetworkParameters.MAX_MONEY, candidates);
                 candidates = null;  // Selector took ownership and might have changed candidates. Don't access again.
-                req.tx.getOutput(0).setValue(bestCoinSelection.valueGathered);
+                req.tx.getOutput(0).setValueBeforeInterest(bestCoinSelection.valueGathered);
                 log.info("  emptying {}", bestCoinSelection.valueGathered.toFriendlyString());
             }
 
@@ -3613,10 +3613,10 @@ public class Wallet extends BaseTaggableObject implements Serializable, BlockCha
         int size = tx.bitcoinSerialize().length;
         size += estimateBytesForSigning(coinSelection);
         Coin fee = baseFee.add(feePerKb.multiply((size / 1000) + 1));
-        output.setValue(output.getValue().subtract(fee));
+        output.subtract(fee);
         // Check if we need additional fee due to the output's value
         if (output.getValue().compareTo(Coin.CENT) < 0 && fee.compareTo(Transaction.REFERENCE_DEFAULT_MIN_TX_FEE) < 0)
-            output.setValue(output.getValue().subtract(Transaction.REFERENCE_DEFAULT_MIN_TX_FEE.subtract(fee)));
+            output.subtract(Transaction.REFERENCE_DEFAULT_MIN_TX_FEE.subtract(fee));
         return output.getMinNonDustValue().compareTo(output.getValue()) <= 0;
     }
 
