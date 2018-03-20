@@ -338,7 +338,13 @@ public class TransactionOutput extends ChildMessage implements Serializable {
     /**
      * Sets the value of this output.
      */
-    public void setValue(Coin value) {
+    private void setValue(Coin value) {
+        checkNotNull(value);
+        unCache();
+        this.value = value.value;
+    }
+
+    public void setValueBeforeInterest(Coin value) {
         checkNotNull(value);
         unCache();
         this.value = value.value;
