@@ -265,7 +265,7 @@ public class PaymentChannelServerState {
     private synchronized Wallet.SendRequest makeUnsignedChannelContract(Coin valueToMe) {
         Transaction tx = new Transaction(wallet.getParams());
         if (!totalValue.subtract(valueToMe).equals(Coin.ZERO)) {
-            clientOutput.setValue(totalValue.subtract(valueToMe));
+            clientOutput.setValueBeforeInterest(totalValue.subtract(valueToMe));
             tx.addOutput(clientOutput);
         }
         tx.addInput(multisigContract.getOutput(0));
